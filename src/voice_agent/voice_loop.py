@@ -4,6 +4,7 @@ import asyncio
 from typing import AsyncIterator, Callable, Optional
 
 from .audio import AudioFrame, AudioFrontend
+from .audio_player import BufferedAudioPlayer
 from .dialog import DialogManager, DialogTurn
 from .idle import IdleManager
 from .stt import STTClient
@@ -15,15 +16,30 @@ PlaybackHook = Callable[[bytes, bool], asyncio.Future | None]
 
 
 class TTSPlayer:
-    def __init__(self, tts: TTSClient, playback_hook: Optional[PlaybackHook] = None) -> None:
+    def __init__(self, tts: TTSClient, playback_hook: Optional[PlaybackHook] = None, sample_rate: int = 24000) -> None:
         self.tts = tts
         self.playback_hook = playback_hook
         self._task: Optional[asyncio.Task[None]] = None
+        self._buffered_player = BufferedAudioPlayer(
+            sample_rate=sample_rate,
+            min_buffer_ms=100,
+            max_buffer_ms=500,
+            playback_callback=lambda chunk: self._play_chunk(chunk) if self.playback_hook else None,
+        )
+
+    def _play_chunk(self, chunk: bytes) -> Optional[asyncio.Future]:
+        """Internal method to play a single audio chunk."""
+        if self.playback_hook:
+            maybe_future = self.playback_hook(chunk, False)
+            if asyncio.isfuture(maybe_future) or asyncio.iscoroutine(maybe_future):
+                return maybe_future
+        return None
 
     def is_playing(self) -> bool:
         return self._task is not None and not self._task.done()
 
     async def stop(self) -> None:
+        await self._buffered_player.stop()
         if self._task and not self._task.done():
             self._task.cancel()
             try:
@@ -37,14 +53,20 @@ class TTSPlayer:
         self._task = asyncio.create_task(self._stream(text))
 
     async def _stream(self, text: str) -> None:
-        async for chunk in self.tts.stream_synthesize(text):
-            if self.playback_hook:
-                maybe_future = self.playback_hook(chunk.audio, chunk.is_final)
-                if asyncio.isfuture(maybe_future) or asyncio.iscoroutine(maybe_future):
-                    await maybe_future
-            else:
-                # Placeholder playback: just log length
-                print(f"[TTS] {len(chunk.audio)} bytes{' (final)' if chunk.is_final else ''}")
+        await self._buffered_player.start_stream()
+        try:
+            async for chunk in self.tts.stream_synthesize(text):
+                if chunk.audio:
+                    await self._buffered_player.add_chunk(chunk.audio)
+                if chunk.is_final:
+                    break
+            await self._buffered_player.finish_stream()
+        except asyncio.CancelledError:
+            await self._buffered_player.stop()
+            raise
+        except Exception:
+            await self._buffered_player.stop()
+            raise
 
 
 class VoiceLoop:

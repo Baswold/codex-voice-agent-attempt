@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .config import LLMConfig, STTConfig, TTSConfig
 from .llm import LLMClient, MinimaxClient, MinimaxStubClient
-from .stt import EchoSTT, STTClient, WhisperAPIClient
+from .stt import EchoSTT, ElevenLabsSTT, STTClient, WhisperAPIClient
 from .tts import DummyTTS, ElevenLabsTTS, TTSClient
 
 
@@ -15,6 +15,8 @@ def build_llm(cfg: LLMConfig) -> LLMClient:
 def build_stt(cfg: STTConfig) -> STTClient:
     if cfg.provider == "whisper_api" and cfg.api_key:
         return WhisperAPIClient(api_key=cfg.api_key, language=cfg.language)
+    if cfg.provider == "elevenlabs" and cfg.api_key:
+        return ElevenLabsSTT(api_key=cfg.api_key)
     return EchoSTT()
 
 

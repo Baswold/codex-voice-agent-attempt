@@ -78,3 +78,46 @@ class WhisperAPIClient(STTClient):
             resp.raise_for_status()
             payload = resp.json()
             return payload.get("text", "")
+
+
+class ElevenLabsSTT(STTClient):
+    def __init__(self, api_key: str, model: str = "eleven_multilingual_v2", sample_rate: int = 16000) -> None:
+        self.api_key = api_key
+        self.model = model
+        self.sample_rate = sample_rate
+
+    async def stream_transcribe(self, frames: AsyncIterator[AudioFrame]) -> AsyncIterator[TranscriptChunk]:
+        collected: List[bytes] = []
+        async for frame in frames:
+            collected.append(frame.data)
+        if not collected:
+            return
+        audio_bytes = b"".join(collected)
+        # ElevenLabs expects audio in supported formats (mp3, wav, etc.)
+        wav_bytes = self._pcm_to_wav(audio_bytes)
+        text = await self._send(wav_bytes)
+        yield TranscriptChunk(text=text, final=True)
+
+    def _pcm_to_wav(self, pcm: bytes) -> bytes:
+        buffer = io.BytesIO()
+        with wave.open(buffer, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(self.sample_rate)
+            wf.writeframes(pcm)
+        return buffer.getvalue()
+
+    async def _send(self, wav_bytes: bytes) -> str:
+        headers = {"xi-api-key": self.api_key}
+        files = {"audio": ("audio.wav", wav_bytes, "audio/wav")}
+        data = {"model_id": self.model}
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                "https://api.elevenlabs.io/v1/speech-to-text",
+                headers=headers,
+                data=data,
+                files=files,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+            return payload.get("text", "")

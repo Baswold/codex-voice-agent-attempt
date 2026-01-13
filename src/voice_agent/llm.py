@@ -37,11 +37,19 @@ class MinimaxStubClient(LLMClient):
 
 
 class MinimaxClient(LLMClient):
-    def __init__(self, api_key: str, model: str, max_tokens: int = 512, api_url: str = "https://api.minimax.chat/v1/text/chatcompletion_pro") -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        max_tokens: int = 512,
+        api_url: str = "https://api.minimax.chat/v1/text/chatcompletion_pro",
+        enable_streaming: bool = True,
+    ) -> None:
         self.api_key = api_key
         self.model = model
         self.max_tokens = max_tokens
         self.api_url = api_url
+        self.enable_streaming = enable_streaming
 
     async def complete(self, messages: Iterable[ChatMessage]) -> AsyncIterator[str]:
         payload = {
@@ -53,17 +61,43 @@ class MinimaxClient(LLMClient):
                 }
                 for m in messages
             ],
-            "stream": False,
+            "stream": self.enable_streaming,
             "max_tokens": self.max_tokens,
         }
         headers = {"Authorization": f"Bearer {self.api_key}"}
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(self.api_url, headers=headers, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-            choices = data.get("choices") or data.get("data") or []
-            if choices:
-                content = choices[0].get("message", {}).get("content", "")
-            else:
-                content = data.get("reply", "")
-            yield str(content)
+
+        if self.enable_streaming:
+            # Streaming mode: yield chunks as they arrive
+            async with httpx.AsyncClient(timeout=120) as client:
+                async with client.stream("POST", self.api_url, headers=headers, json=payload) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if line.startswith("data: "):
+                            data_str = line[6:].strip()
+                            if data_str == "[DONE]":
+                                break
+                            try:
+                                import json
+
+                                data = json.loads(data_str)
+                                choices = data.get("choices") or data.get("data") or []
+                                if choices:
+                                    delta = choices[0].get("delta", {})
+                                    content = delta.get("content", "")
+                                    if content:
+                                        yield content
+                            except Exception:
+                                # Skip malformed chunks
+                                continue
+        else:
+            # Non-streaming mode: yield full response at once
+            async with httpx.AsyncClient(timeout=120) as client:
+                resp = await client.post(self.api_url, headers=headers, json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+                choices = data.get("choices") or data.get("data") or []
+                if choices:
+                    content = choices[0].get("message", {}).get("content", "")
+                else:
+                    content = data.get("reply", "")
+                yield str(content)
