@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "voice-agent"
+version = "0.1.0"
+description = "Voice agent infrastructure with pluggable STT/TTS/LLM and tool runner"
+requires-python = ">=3.10"
+dependencies = ["httpx>=0.25.0"]
+
+[project.optional-dependencies]
+dev = []
+audio = ["sounddevice>=0.4.6"]
+ssh = ["asyncssh>=2.14.2"]
+serial = ["pyserial>=3.5"]
+vad = ["webrtcvad>=2.0.10"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
