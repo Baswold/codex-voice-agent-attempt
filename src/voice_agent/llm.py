@@ -101,3 +101,71 @@ class MinimaxClient(LLMClient):
                 else:
                     content = data.get("reply", "")
                 yield str(content)
+
+
+class OpenRouterClient(LLMClient):
+    """Client for OpenRouter API (supports Minimax and other models)."""
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "minimax/minimax-01",
+        max_tokens: int = 512,
+        enable_streaming: bool = True,
+    ) -> None:
+        self.api_key = api_key
+        self.model = model
+        self.max_tokens = max_tokens
+        self.enable_streaming = enable_streaming
+        self.api_url = "https://openrouter.ai/api/v1/chat/completions"
+
+    async def complete(self, messages: Iterable[ChatMessage]) -> AsyncIterator[str]:
+        payload = {
+            "model": self.model,
+            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "stream": self.enable_streaming,
+            "max_tokens": self.max_tokens,
+        }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "HTTP-Referer": "https://github.com/Baswold/codex-voice-agent",
+            "X-Title": "Voice Agent",
+        }
+
+        if self.enable_streaming:
+            async with httpx.AsyncClient(timeout=120) as client:
+                async with client.stream("POST", self.api_url, headers=headers, json=payload) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if line.startswith("data: "):
+                            data_str = line[6:].strip()
+                            if data_str == "[DONE]":
+                                break
+                            try:
+                                import json
+
+                                data = json.loads(data_str)
+                                choices = data.get("choices", [])
+                                if choices:
+                                    delta = choices[0].get("delta", {})
+                                    content = delta.get("content", "")
+                                    if content:
+                                        yield content
+                            except Exception:
+                                continue
+        else:
+            async with httpx.AsyncClient(timeout=120) as client:
+                resp = await client.post(self.api_url, headers=headers, json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+                choices = data.get("choices", [])
+                if choices:
+                    content = choices[0].get("message", {}).get("content", "")
+                    yield str(content)
+
+    async def chat(self, messages: Iterable[ChatMessage]) -> str:
+        """Convenience method to get the full response as a string."""
+        parts = []
+        async for chunk in self.complete(messages):
+            parts.append(chunk)
+        return "".join(parts)

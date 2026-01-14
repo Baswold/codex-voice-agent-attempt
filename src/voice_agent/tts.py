@@ -64,3 +64,30 @@ class ElevenLabsTTS(TTSClient):
                 async for chunk in resp.aiter_bytes():
                     yield SpeechChunk(audio=chunk, is_final=False)
         yield SpeechChunk(audio=b"", is_final=True)
+
+
+class OpenAITTS(TTSClient):
+    def __init__(self, api_key: str, model: str = "tts-1", voice: str = "alloy") -> None:
+        self.api_key = api_key
+        self.model = model
+        self.voice = voice
+
+    async def synthesize(self, text: str) -> bytes:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                "https://api.openai.com/v1/audio/speech",
+                headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                json={"model": self.model, "voice": self.voice, "input": text},
+            )
+            resp.raise_for_status()
+            return resp.content
+
+    async def stream_synthesize(self, text: str) -> AsyncIterator[SpeechChunk]:
+        # OpenAI TTS doesn't support streaming yet, so we'll get the full audio and yield it
+        audio = await self.synthesize(text)
+        # Split into chunks for smoother playback
+        chunk_size = 4096
+        for i in range(0, len(audio), chunk_size):
+            chunk = audio[i : i + chunk_size]
+            yield SpeechChunk(audio=chunk, is_final=(i + chunk_size >= len(audio)))
+        yield SpeechChunk(audio=b"", is_final=True)
